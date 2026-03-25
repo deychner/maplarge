@@ -471,6 +471,11 @@ namespace TestProject.Services
         private string GetRelativePath(string fullPath)
         {
             var relativePath = Path.GetRelativePath(_homeDirectory, fullPath);
+            
+            // Handle the case when we're at the root directory
+            if (relativePath == ".")
+                return "/";
+            
             return "/" + relativePath.Replace(Path.DirectorySeparatorChar, '/');
         }
 

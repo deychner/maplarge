@@ -402,7 +402,6 @@ class FileSystemBrowser {
 
             // Refresh the current view
             this.refreshCurrentView();
-
         } catch (error) {
             this.showError(`Failed to delete item: ${error.message}`);
         }
