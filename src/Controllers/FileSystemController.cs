@@ -132,51 +132,5 @@ namespace TestProject.Controllers
                 return StatusCode(500, new { message = "Internal server error" });
             }
         }
-
-        [HttpPost("move")]
-        public async Task<IActionResult> MoveAsync([FromBody] MoveRequest request, CancellationToken cancellationToken = default)
-        {
-            try
-            {
-                var success = await _fileSystemService.MoveFileOrDirectoryAsync(request.SourcePath, request.DestinationPath, cancellationToken);
-                if (success)
-                {
-                    return Ok(new { message = "Moved successfully" });
-                }
-                return NotFound(new { message = "Source file or directory not found" });
-            }
-            catch (OperationCanceledException)
-            {
-                return StatusCode(499, new { message = "Move operation was cancelled or timed out" });
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error moving from {Source} to {Destination}", request.SourcePath, request.DestinationPath);
-                return StatusCode(500, new { message = "Internal server error" });
-            }
-        }
-
-        [HttpPost("copy")]
-        public async Task<IActionResult> CopyAsync([FromBody] CopyRequest request, CancellationToken cancellationToken = default)
-        {
-            try
-            {
-                var success = await _fileSystemService.CopyFileOrDirectoryAsync(request.SourcePath, request.DestinationPath, cancellationToken);
-                if (success)
-                {
-                    return Ok(new { message = "Copied successfully" });
-                }
-                return NotFound(new { message = "Source file or directory not found" });
-            }
-            catch (OperationCanceledException)
-            {
-                return StatusCode(499, new { message = "Copy operation was cancelled or timed out" });
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error copying from {Source} to {Destination}", request.SourcePath, request.DestinationPath);
-                return StatusCode(500, new { message = "Internal server error" });
-            }
-        }
     }
 }

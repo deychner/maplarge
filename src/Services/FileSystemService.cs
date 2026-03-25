@@ -34,216 +34,76 @@ namespace TestProject.Services
 
         public async Task<DirectoryContentResponse> GetDirectoryContentsAsync(string path, CancellationToken cancellationToken = default)
         {
-            var cacheKey = GetDirectoryCacheKey(path);
+            var cacheKey = GetCacheKey("directory_contents", path);
 
-            // Try to get from cache first
             if (_memoryCache.TryGetValue(cacheKey, out DirectoryContentResponse? cachedResult))
             {
-                _logger.LogDebug("Directory contents served from cache: {Path} (key: {CacheKey})", path, cacheKey);
+                _logger.LogDebug("Directory contents served from cache: Path='{Path}', CacheKey='{CacheKey}'", path, cacheKey);
                 return cachedResult!;
             }
 
             var fullPath = GetSafePath(path);
             if (!Directory.Exists(fullPath))
-            {
                 throw new DirectoryNotFoundException($"Directory not found: {path}");
-            }
 
-            // Use Task.Run for CPU-intensive operations to avoid blocking
-            var result = await Task.Run(() =>
+            var directoryInfo = new DirectoryInfo(fullPath);
+            var items = new ConcurrentBag<FileSystemItem>();
+            var fileCount = 0;
+            var directoryCount = 0;
+            var totalSize = 0L;
+
+            // Process all items in parallel
+            var allItems = directoryInfo.EnumerateFileSystemInfos();
+            await Task.Run(() => 
+                Parallel.ForEach(allItems, GetParallelOptions(cancellationToken), item =>
+                    ProcessFileSystemItem(item, items, ref fileCount, ref directoryCount, ref totalSize, cancellationToken)), cancellationToken);
+
+            var sortedItems = items.OrderBy(i => !i.IsDirectory).ThenBy(i => i.Name).ToList();
+
+            var result = new DirectoryContentResponse
             {
-                var items = new ConcurrentBag<FileSystemItem>();
-                var fileCount = 0;
-                var directoryCount = 0;
-                var totalSize = 0L;
+                CurrentPath = GetRelativePath(fullPath),
+                ParentPath = GetParentPath(path),
+                Items = sortedItems,
+                FileCount = fileCount,
+                DirectoryCount = directoryCount,
+                TotalSize = totalSize
+            };
 
-                // Use EnumerateDirectories and EnumerateFiles for better memory efficiency
-                // This avoids creating arrays of all entries upfront
-                var directoryInfo = new DirectoryInfo(fullPath);
-                var directories = directoryInfo.EnumerateDirectories();
-                var files = directoryInfo.EnumerateFiles();
-
-                // Configure parallel options with cancellation token
-                var parallelOptions = GetParallelOptions(cancellationToken);
-
-                // Process directories in parallel with streaming enumeration
-                Parallel.ForEach(directories, parallelOptions, directory =>
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-
-                    try
-                    {
-                        var item = new FileSystemItem
-                        {
-                            Name = directory.Name,
-                            Path = GetRelativePath(directory.FullName),
-                            IsDirectory = true,
-                            LastModified = directory.LastWriteTime,
-                            Size = GetDirectorySize(directory.FullName, cancellationToken)
-                        };
-                        items.Add(item);
-                        Interlocked.Increment(ref directoryCount);
-                        Interlocked.Add(ref totalSize, item.Size);
-                    }
-                    catch (Exception ex) when (ex is not OperationCanceledException)
-                    {
-                        _logger.LogWarning(ex, "Error processing directory: {Directory}", directory.FullName);
-                    }
-                });
-
-                // Process files in parallel with streaming enumeration
-                Parallel.ForEach(files, parallelOptions, file =>
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-
-                    try
-                    {
-                        var item = new FileSystemItem
-                        {
-                            Name = file.Name,
-                            Path = GetRelativePath(file.FullName),
-                            IsDirectory = false,
-                            LastModified = file.LastWriteTime,
-                            Size = file.Length
-                        };
-                        items.Add(item);
-                        Interlocked.Increment(ref fileCount);
-                        Interlocked.Add(ref totalSize, item.Size);
-                    }
-                    catch (Exception ex) when (ex is not OperationCanceledException)
-                    {
-                        _logger.LogWarning(ex, "Error processing file: {File}", file.FullName);
-                    }
-                });
-
-                // Sort: directories first, then files, both alphabetically
-                var sortedItems = items.OrderBy(i => !i.IsDirectory).ThenBy(i => i.Name).ToList();
-
-                return new DirectoryContentResponse
-                {
-                    CurrentPath = GetRelativePath(fullPath),
-                    ParentPath = GetParentPath(path),
-                    Items = sortedItems,
-                    FileCount = fileCount,
-                    DirectoryCount = directoryCount,
-                    TotalSize = totalSize
-                };
-            }, cancellationToken);
-
-            // Cache the result for 5 minutes and track the cache key
-            _memoryCache.Set(cacheKey, result, TimeSpan.FromMinutes(5));
-            _directoryCacheKeys.TryAdd(cacheKey, 0); // Track this cache key
-            _logger.LogDebug("Directory contents cached for path: '{Path}' using cache key: '{CacheKey}'", path, cacheKey);
-
+            CacheResult(cacheKey, result, TimeSpan.FromMinutes(15), _directoryCacheKeys);
             return result;
         }
 
         public async Task<IList<FileSystemItem>> SearchFilesAsync(SearchRequest request, CancellationToken cancellationToken = default)
         {
-            var cacheKey = GetSearchCacheKey(request);
+            var cacheKey = GetCacheKey("search", request.Path ?? "/", request.Query, request.IncludeSubdirectories.ToString());
 
-            // Try to get from cache first
             if (_memoryCache.TryGetValue(cacheKey, out IList<FileSystemItem>? cachedResults))
             {
-                _logger.LogDebug("Search results served from cache: {Query}", request.Query);
+                _logger.LogDebug("Search results served from cache: Query='{Query}', Path='{Path}', CacheKey='{CacheKey}'", request.Query, request.Path ?? "/", cacheKey);
                 return cachedResults!;
             }
 
             var searchPath = GetSafePath(request.Path ?? "");
+            var searchOption = request.IncludeSubdirectories ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
+            var items = new ConcurrentBag<FileSystemItem>();
 
             try
             {
-                // Use Task.Run for file system operations to avoid blocking
-                var results = await Task.Run(() =>
+                var directoryInfo = new DirectoryInfo(searchPath);
+                var pattern = $"*{request.Query}*";
+
+                // Search both files and directories in parallel
+                await Task.Run(() =>
                 {
-                    var items = new ConcurrentBag<FileSystemItem>();
-                    var searchOption = request.IncludeSubdirectories ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
-                    var directoryInfo = new DirectoryInfo(searchPath);
-
-                    // Configure parallel options with cancellation token
-                    var parallelOptions = GetParallelOptions(cancellationToken);
-
-                    // Search files and directories in parallel using streaming enumeration
-                    var searchTasks = new List<Task>
-                    {
-                        // Search files with streaming enumeration
-                        Task.Run(() =>
-                        {
-                            try
-                            {
-                                var files = directoryInfo.EnumerateFiles($"*{request.Query}*", searchOption);
-                                Parallel.ForEach(files, parallelOptions, file =>
-                                {
-                                    cancellationToken.ThrowIfCancellationRequested();
-
-                                    try
-                                    {
-                                        items.Add(new FileSystemItem
-                                        {
-                                            Name = file.Name,
-                                            Path = GetRelativePath(file.FullName),
-                                            IsDirectory = false,
-                                            LastModified = file.LastWriteTime,
-                                            Size = file.Length
-                                        });
-                                    }
-                                    catch (Exception ex) when (ex is not OperationCanceledException)
-                                    {
-                                        _logger.LogWarning(ex, "Error processing file: {File}", file.FullName);
-                                    }
-                                });
-                            }
-                            catch (Exception ex) when (ex is not OperationCanceledException)
-                            {
-                                _logger.LogWarning(ex, "Error searching files in: {Path}", searchPath);
-                            }
-                        }, cancellationToken),
-
-                        // Search directories with streaming enumeration
-                        Task.Run(() =>
-                        {
-                            try
-                            {
-                                var directories = directoryInfo.EnumerateDirectories($"*{request.Query}*", searchOption);
-                                Parallel.ForEach(directories, parallelOptions, directory =>
-                                {
-                                    cancellationToken.ThrowIfCancellationRequested();
-
-                                    try
-                                    {
-                                        items.Add(new FileSystemItem
-                                        {
-                                            Name = directory.Name,
-                                            Path = GetRelativePath(directory.FullName),
-                                            IsDirectory = true,
-                                            LastModified = directory.LastWriteTime,
-                                            Size = GetDirectorySize(directory.FullName, cancellationToken)
-                                        });
-                                    }
-                                    catch (Exception ex) when (ex is not OperationCanceledException)
-                                    {
-                                        _logger.LogWarning(ex, "Error processing directory: {Directory}", directory.FullName);
-                                    }
-                                });
-                            }
-                            catch (Exception ex) when (ex is not OperationCanceledException)
-                            {
-                                _logger.LogWarning(ex, "Error searching directories in: {Path}", searchPath);
-                            }
-                        }, cancellationToken)
-                    };
-
-                    // Wait for both search operations to complete
-                    Task.WaitAll([.. searchTasks], cancellationToken);
-
-                    return items.OrderBy(r => !r.IsDirectory).ThenBy(r => r.Name).ToList();
+                    var allItems = directoryInfo.EnumerateFileSystemInfos(pattern, searchOption);
+                    Parallel.ForEach(allItems, GetParallelOptions(cancellationToken), item =>
+                        ProcessFileSystemItemSimple(item, items, cancellationToken));
                 }, cancellationToken);
 
-                // Cache search results for 15 minutes
-                _memoryCache.Set(cacheKey, results, TimeSpan.FromMinutes(15));
-                _searchCacheKeys.TryAdd(cacheKey, 0); // Use 0 as placeholder value
-                _logger.LogDebug("Search results cached: {Query} for 15 minutes", request.Query);
+                var results = items.OrderBy(r => !r.IsDirectory).ThenBy(r => r.Name).ToList();
 
+                CacheResult(cacheKey, results, TimeSpan.FromMinutes(15), _searchCacheKeys);
                 return results;
             }
             catch (Exception ex)
@@ -258,11 +118,8 @@ namespace TestProject.Services
             var fullPath = GetSafePath(filePath);
 
             if (!File.Exists(fullPath))
-            {
                 throw new FileNotFoundException($"File not found: {filePath}");
-            }
 
-            // Use async file reading to avoid blocking
             return await File.ReadAllBytesAsync(fullPath, cancellationToken);
         }
 
@@ -271,34 +128,14 @@ namespace TestProject.Services
             var targetPath = GetSafePath(targetDirectory);
 
             if (!Directory.Exists(targetPath))
-            {
                 Directory.CreateDirectory(targetPath);
-            }
 
-            var fileName = file.FileName;
-            var filePath = Path.Combine(targetPath, fileName);
+            var filePath = GetUniqueFilePath(targetPath, file.FileName);
 
-            // Handle duplicate file names
-            var counter = 1;
-            var originalFileName = Path.GetFileNameWithoutExtension(fileName);
-            var extension = Path.GetExtension(fileName);
+            using var stream = new FileStream(filePath, FileMode.Create);
+            await file.CopyToAsync(stream, cancellationToken);
 
-            while (File.Exists(filePath))
-            {
-                fileName = $"{originalFileName}_{counter}{extension}";
-                filePath = Path.Combine(targetPath, fileName);
-                counter++;
-            }
-
-            using (var stream = new FileStream(filePath, FileMode.Create))
-            {
-                await file.CopyToAsync(stream, cancellationToken);
-            }
-
-            // Invalidate directory cache for the target directory
-            await InvalidateDirectoryCacheAsync(targetDirectory, cancellationToken);
-            _logger.LogDebug("Cache invalidated after file upload: {Directory}", targetDirectory);
-
+            await InvalidateCacheAsync(targetDirectory, cancellationToken);
             return GetRelativePath(filePath);
         }
 
@@ -310,135 +147,28 @@ namespace TestProject.Services
                 var fullPath = GetSafePath(path);
                 var parentPath = GetParentPath(path);
 
-                try
+                if (File.Exists(fullPath))
                 {
-                    if (File.Exists(fullPath))
-                    {
-                        await Task.Run(() => File.Delete(fullPath), cancellationToken);
-
-                        // Invalidate cache for the parent directory
-                        await InvalidateDirectoryCacheAsync(parentPath ?? "/", cancellationToken);
-                        _logger.LogDebug("Cache invalidated after file deletion: {Path}", path);
-
-                        return true;
-                    }
-                    else if (Directory.Exists(fullPath))
-                    {
-                        await Task.Run(() => Directory.Delete(fullPath, true), cancellationToken);
-
-                        // Comprehensive cache invalidation for directory deletion
-                        await InvalidateDirectoryCacheAsync(path, cancellationToken);
-                        await InvalidateDirectoryCacheAsync(parentPath ?? "/", cancellationToken);
-                        _logger.LogDebug("Cache invalidated after directory deletion: {Path}", path);
-
-                        return true;
-                    }
-                    return false;
+                    await Task.Run(() => File.Delete(fullPath), cancellationToken);
+                    await InvalidateCacheAsync(parentPath ?? "/", cancellationToken);
+                    return true;
                 }
-                catch (Exception ex)
+                else if (Directory.Exists(fullPath))
                 {
-                    _logger.LogError(ex, "Error deleting: {Path}", path);
+                    await Task.Run(() => Directory.Delete(fullPath, true), cancellationToken);
+                    await InvalidateCacheAsync(path, cancellationToken);
+                    await InvalidateCacheAsync(parentPath ?? "/", cancellationToken);
+                    return true;
+                }
+                else
+                {
                     return false;
                 }
             }
-            finally
+            catch (Exception ex)
             {
-                _semaphore.Release();
-            }
-        }
-
-        public async Task<bool> MoveFileOrDirectoryAsync(string sourcePath, string destinationPath, CancellationToken cancellationToken = default)
-        {
-            await _semaphore.WaitAsync(cancellationToken);
-            try
-            {
-                var fullSourcePath = GetSafePath(sourcePath);
-                var fullDestinationPath = GetSafePath(destinationPath);
-
-                try
-                {
-                    if (File.Exists(fullSourcePath))
-                    {
-                        await Task.Run(() => File.Move(fullSourcePath, fullDestinationPath), cancellationToken);
-
-                        // Invalidate cache for both source and destination directories
-                        var sourceParent = GetParentPath(sourcePath);
-                        var destinationParent = GetParentPath(destinationPath);
-                        await InvalidateDirectoryCacheAsync(sourceParent ?? "/", cancellationToken);
-                        await InvalidateDirectoryCacheAsync(destinationParent ?? "/", cancellationToken);
-                        _logger.LogDebug("Cache invalidated after file move from {Source} to {Destination}", sourcePath, destinationPath);
-
-                        return true;
-                    }
-                    else if (Directory.Exists(fullSourcePath))
-                    {
-                        await Task.Run(() => Directory.Move(fullSourcePath, fullDestinationPath), cancellationToken);
-
-                        // Invalidate cache for source, destination, and their parent directories
-                        var sourceParent = GetParentPath(sourcePath);
-                        var destinationParent = GetParentPath(destinationPath);
-                        await InvalidateDirectoryCacheAsync(sourceParent ?? "/", cancellationToken);
-                        await InvalidateDirectoryCacheAsync(destinationParent ?? "/", cancellationToken);
-                        await InvalidateDirectoryCacheAsync(sourcePath, cancellationToken);
-                        await InvalidateDirectoryCacheAsync(destinationPath, cancellationToken);
-                        _logger.LogDebug("Cache invalidated after directory move from {Source} to {Destination}", sourcePath, destinationPath);
-
-                        return true;
-                    }
-                    return false;
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Error moving from {Source} to {Destination}", sourcePath, destinationPath);
-                    return false;
-                }
-            }
-            finally
-            {
-                _semaphore.Release();
-            }
-        }
-
-        public async Task<bool> CopyFileOrDirectoryAsync(string sourcePath, string destinationPath, CancellationToken cancellationToken = default)
-        {
-            await _semaphore.WaitAsync(cancellationToken);
-            try
-            {
-                var fullSourcePath = GetSafePath(sourcePath);
-                var fullDestinationPath = GetSafePath(destinationPath);
-
-                try
-                {
-                    if (File.Exists(fullSourcePath))
-                    {
-                        await Task.Run(() => File.Copy(fullSourcePath, fullDestinationPath, true), cancellationToken);
-
-                        // Invalidate cache for the destination directory
-                        var destinationParent = GetParentPath(destinationPath);
-                        await InvalidateDirectoryCacheAsync(destinationParent ?? "/", cancellationToken);
-                        _logger.LogDebug("Cache invalidated after file copy to {Destination}", destinationPath);
-
-                        return true;
-                    }
-                    else if (Directory.Exists(fullSourcePath))
-                    {
-                        await Task.Run(() => CopyDirectory(fullSourcePath, fullDestinationPath, cancellationToken), cancellationToken);
-
-                        // Invalidate cache for the destination directory and the copied directory
-                        var destinationParent = GetParentPath(destinationPath);
-                        await InvalidateDirectoryCacheAsync(destinationParent ?? "/", cancellationToken);
-                        await InvalidateDirectoryCacheAsync(destinationPath, cancellationToken);
-                        _logger.LogDebug("Cache invalidated after directory copy to {Destination}", destinationPath);
-
-                        return true;
-                    }
-                    return false;
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Error copying from {Source} to {Destination}", sourcePath, destinationPath);
-                    return false;
-                }
+                _logger.LogError(ex, "Error deleting: {Path}", path);
+                return false;
             }
             finally
             {
@@ -471,6 +201,11 @@ namespace TestProject.Services
         private string GetRelativePath(string fullPath)
         {
             var relativePath = Path.GetRelativePath(_homeDirectory, fullPath);
+            
+            // Handle the case when we're at the root directory
+            if (relativePath == ".")
+                return "/";
+            
             return "/" + relativePath.Replace(Path.DirectorySeparatorChar, '/');
         }
 
@@ -549,7 +284,7 @@ namespace TestProject.Services
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    _logger.LogWarning(ex, "Failed to copy file: {Source} to {Destination}", 
+                    _logger.LogWarning(ex, "Failed to copy file: {Source} to {Destination}",
                         file.FullName, Path.Combine(destinationDir, file.Name));
                 }
             });
@@ -566,78 +301,132 @@ namespace TestProject.Services
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    _logger.LogWarning(ex, "Failed to copy directory: {Source} to {Destination}", 
+                    _logger.LogWarning(ex, "Failed to copy directory: {Source} to {Destination}",
                         subDir.FullName, Path.Combine(destinationDir, subDir.Name));
                 }
             }
         }
 
         // Cache helper methods
-        private static string GetDirectoryCacheKey(string path)
+        private static string GetCacheKey(string prefix, params string[] parts)
         {
-            var normalizedPath = string.IsNullOrEmpty(path) || path == "/" ? "" : path.TrimStart('/');
-            var cacheKey = $"directory_contents_{normalizedPath}";
-            return cacheKey;
+            var normalizedParts = parts.Select(p => string.IsNullOrEmpty(p) || p == "/" ? "root" : p.TrimStart('/'));
+            return $"{prefix}_{string.Join("_", normalizedParts)}";
         }
 
-        private static string GetSearchCacheKey(SearchRequest request)
+        private void CacheResult<T>(string cacheKey, T result, TimeSpan expiration, ConcurrentDictionary<string, byte> keyTracker)
         {
-            var normalizedPath = string.IsNullOrEmpty(request.Path) || request.Path == "/" ? "" : request.Path.TrimStart('/');
-            return $"search_{request.Query}_{normalizedPath}_{request.IncludeSubdirectories}";
+            _memoryCache.Set(cacheKey, result, expiration);
+            keyTracker.TryAdd(cacheKey, 0);
+
+            var itemType = result switch
+            {
+                DirectoryContentResponse => "DirectoryContents",
+                IList<FileSystemItem> => "SearchResults", 
+                _ => typeof(T).Name
+            };
+
+            _logger.LogDebug("Cached {ItemType}: CacheKey='{CacheKey}', Expiration='{Expiration}'", itemType, cacheKey, expiration);
         }
 
-        private async Task InvalidateDirectoryCacheAsync(string path, CancellationToken cancellationToken = default)
+        private void ProcessFileSystemItem(FileSystemInfo item, ConcurrentBag<FileSystemItem> items, ref int fileCount, ref int directoryCount, ref long totalSize, CancellationToken cancellationToken)
         {
-            var cacheKey = GetDirectoryCacheKey(path);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            try
+            {
+                var fileSystemItem = new FileSystemItem
+                {
+                    Name = item.Name,
+                    Path = GetRelativePath(item.FullName),
+                    IsDirectory = item is DirectoryInfo,
+                    LastModified = item.LastWriteTime,
+                    Size = item is DirectoryInfo dir ? GetDirectorySize(dir.FullName, cancellationToken) : ((FileInfo)item).Length
+                };
+
+                items.Add(fileSystemItem);
+
+                if (fileSystemItem.IsDirectory)
+                    Interlocked.Increment(ref directoryCount);
+                else
+                    Interlocked.Increment(ref fileCount);
+
+                Interlocked.Add(ref totalSize, fileSystemItem.Size);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(ex, "Error processing item: {Item}", item.FullName);
+            }
+        }
+
+        private void ProcessFileSystemItemSimple(FileSystemInfo item, ConcurrentBag<FileSystemItem> items, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            try
+            {
+                var fileSystemItem = new FileSystemItem
+                {
+                    Name = item.Name,
+                    Path = GetRelativePath(item.FullName),
+                    IsDirectory = item is DirectoryInfo,
+                    LastModified = item.LastWriteTime,
+                    Size = item is DirectoryInfo dir ? GetDirectorySize(dir.FullName, cancellationToken) : ((FileInfo)item).Length
+                };
+
+                items.Add(fileSystemItem);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(ex, "Error processing item: {Item}", item.FullName);
+            }
+        }
+
+        private static string GetUniqueFilePath(string directory, string fileName)
+        {
+            var filePath = Path.Combine(directory, fileName);
+
+            if (!File.Exists(filePath))
+                return filePath;
+
+            var originalFileName = Path.GetFileNameWithoutExtension(fileName);
+            var extension = Path.GetExtension(fileName);
+            var counter = 1;
+
+            do
+            {
+                var uniqueFileName = $"{originalFileName}_{counter}{extension}";
+                filePath = Path.Combine(directory, uniqueFileName);
+                counter++;
+            } while (File.Exists(filePath));
+
+            return filePath;
+        }
+
+        private async Task InvalidateCacheAsync(string path, CancellationToken cancellationToken = default)
+        {
+            // Invalidate directory cache
+            var cacheKey = GetCacheKey("directory_contents", path);
             _memoryCache.Remove(cacheKey);
             _directoryCacheKeys.TryRemove(cacheKey, out _);
 
-            _logger.LogDebug("Invalidated directory cache for path: '{Path}' using cache key: '{CacheKey}'", path, cacheKey);
-
-            // Also invalidate search cache entries that might be affected
-            await InvalidateSearchCacheAsync(cancellationToken);
-        }
-
-        private async Task InvalidateSearchCacheAsync(CancellationToken cancellationToken = default)
-        {
-            // Remove all tracked search cache keys in a thread-safe manner
+            // Invalidate search cache
             await Task.Run(() =>
             {
-                // Use more efficient collection operations
-                var keysToRemove = new List<string>(_searchCacheKeys.Count);
+                var keysToRemove = _searchCacheKeys.Keys.ToList();
 
-                // Collect keys first to avoid collection modification during enumeration
-                foreach (var kvp in _searchCacheKeys)
+                Parallel.ForEach(keysToRemove, GetParallelOptions(cancellationToken), key =>
                 {
-                    keysToRemove.Add(kvp.Key);
-                }
-
-                // Parallel removal for better performance with many cache keys
-                if (keysToRemove.Count > 10)
-                {
-                    Parallel.ForEach(keysToRemove, GetParallelOptions(cancellationToken), key =>
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        _memoryCache.Remove(key);
-                        _searchCacheKeys.TryRemove(key, out _);
-                    });
-                }
-                else
-                {
-                    // Sequential for small counts to avoid parallel overhead
-                    foreach (var key in keysToRemove)
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        _memoryCache.Remove(key);
-                        _searchCacheKeys.TryRemove(key, out _);
-                    }
-                }
+                    cancellationToken.ThrowIfCancellationRequested();
+                    _memoryCache.Remove(key);
+                    _searchCacheKeys.TryRemove(key, out _);
+                });
 
                 if (keysToRemove.Count > 0)
-                {
-                    _logger.LogDebug("Invalidated {Count} search cache entries", keysToRemove.Count);
-                }
+                    _logger.LogDebug("Invalidated SearchCache: Count={Count}, CacheKeys=[{CacheKeys}]", keysToRemove.Count, string.Join(", ", keysToRemove.Take(5)) + (keysToRemove.Count > 5 ? "..." : ""));
             }, cancellationToken);
+
+            _logger.LogDebug("Cache invalidated: Path='{Path}', DirectoryCacheKey='{CacheKey}'", path, cacheKey);
         }
 
         private ParallelOptions GetParallelOptions(CancellationToken token)
