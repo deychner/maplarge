@@ -549,7 +549,7 @@ namespace TestProject.Services
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    _logger.LogWarning(ex, "Failed to copy file: {Source} to {Destination}", 
+                    _logger.LogWarning(ex, "Failed to copy file: {Source} to {Destination}",
                         file.FullName, Path.Combine(destinationDir, file.Name));
                 }
             });
@@ -566,7 +566,7 @@ namespace TestProject.Services
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    _logger.LogWarning(ex, "Failed to copy directory: {Source} to {Destination}", 
+                    _logger.LogWarning(ex, "Failed to copy directory: {Source} to {Destination}",
                         subDir.FullName, Path.Combine(destinationDir, subDir.Name));
                 }
             }

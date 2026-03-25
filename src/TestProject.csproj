@@ -15,18 +15,4 @@
     <None Include="wwwroot\**\*" />
   </ItemGroup>
 
-  <ItemGroup>
-    <Content Remove="wwwroot\app.js" />
-    <Content Remove="wwwroot\js\api-service.js" />
-    <Content Remove="wwwroot\js\app.js" />
-    <Content Remove="wwwroot\js\file-system-browser.js" />
-    <Content Remove="wwwroot\js\types.js" />
-    <Content Remove="wwwroot\js\utils.js" />
-    <Content Remove="wwwroot\src\api-service.ts" />
-    <Content Remove="wwwroot\src\app.ts" />
-    <Content Remove="wwwroot\src\file-system-browser.ts" />
-    <Content Remove="wwwroot\src\types.ts" />
-    <Content Remove="wwwroot\src\utils.ts" />
-  </ItemGroup>
-
 </Project>
