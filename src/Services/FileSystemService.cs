@@ -153,16 +153,17 @@ namespace TestProject.Services
                     await InvalidateCacheAsync(parentPath ?? "/", cancellationToken);
                     return true;
                 }
-
-                if (Directory.Exists(fullPath))
+                else if (Directory.Exists(fullPath))
                 {
                     await Task.Run(() => Directory.Delete(fullPath, true), cancellationToken);
                     await InvalidateCacheAsync(path, cancellationToken);
                     await InvalidateCacheAsync(parentPath ?? "/", cancellationToken);
                     return true;
                 }
-
-                return false;
+                else
+                {
+                    return false;
+                }
             }
             catch (Exception ex)
             {
@@ -209,7 +210,10 @@ namespace TestProject.Services
 
                         return true;
                     }
-                    return false;
+                    else
+                    {
+                        return false;
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -252,7 +256,10 @@ namespace TestProject.Services
 
                         return true;
                     }
-                    return false;
+                    else
+                    {
+                        return false;
+                    }
                 }
                 catch (Exception ex)
                 {
