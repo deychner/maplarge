@@ -1,0 +1,19 @@
+{
+  "temperature": 22.5,
+  "humidity": 65,
+  "pressure": 1013.25,
+  "location": {
+    "city": "Seattle",
+    "country": "USA",
+    "coordinates": {
+      "latitude": 47.6062,
+      "longitude": -122.3321
+    }
+  },
+  "conditions": "partly cloudy",
+  "wind": {
+    "speed": 12.5,
+    "direction": "NW"
+  },
+  "timestamp": "2024-03-24T15:30:00Z"
+}

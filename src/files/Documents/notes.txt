@@ -1,0 +1,17 @@
+# FileSystemBrowser Test Notes
+
+## Features Tested
+- [x] Directory browsing
+- [x] File upload
+- [x] File download
+- [ ] Search functionality
+- [ ] File deletion
+
+## Issues Found
+1. Grid alignment issue with directory vs file listings
+2. Mobile responsiveness needs improvement
+
+## Next Steps
+- Fix grid alignment
+- Add more test files
+- Implement unit tests

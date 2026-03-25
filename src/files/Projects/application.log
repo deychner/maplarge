@@ -1,0 +1,9 @@
+2024-03-24 10:30:15 INFO  Application started successfully
+2024-03-24 10:30:16 DEBUG Loading configuration from config.yml
+2024-03-24 10:30:17 INFO  Database connection established
+2024-03-24 10:31:22 WARN  High memory usage detected: 85%
+2024-03-24 10:32:45 ERROR Failed to connect to external service: timeout
+2024-03-24 10:33:10 INFO  User 'admin' logged in from 192.168.1.100
+2024-03-24 10:35:30 DEBUG Processing request ID: req_123456
+2024-03-24 10:36:15 INFO  File uploaded: document.pdf (2.3 MB)
+2024-03-24 10:37:02 WARN  Slow query detected: 1.2s execution time

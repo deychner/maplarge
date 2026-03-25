@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.NewtonsoftJson" Version="8.0.25" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="wwwroot\**\*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Remove="wwwroot\app.js" />
+    <Content Remove="wwwroot\js\api-service.js" />
+    <Content Remove="wwwroot\js\app.js" />
+    <Content Remove="wwwroot\js\file-system-browser.js" />
+    <Content Remove="wwwroot\js\types.js" />
+    <Content Remove="wwwroot\js\utils.js" />
+    <Content Remove="wwwroot\src\api-service.ts" />
+    <Content Remove="wwwroot\src\app.ts" />
+    <Content Remove="wwwroot\src\file-system-browser.ts" />
+    <Content Remove="wwwroot\src\types.ts" />
+    <Content Remove="wwwroot\src\utils.ts" />
+  </ItemGroup>
+
+</Project>

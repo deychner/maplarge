@@ -1,0 +1,16 @@
+- users:
+  - name: admin
+    password: secret123
+    role: administrator
+  - name: user1
+    password: pass456
+    role: user
+
+- database:
+  host: localhost
+  port: 5432
+  name: testdb
+
+- logging:
+  level: info
+  file: /var/log/app.log
